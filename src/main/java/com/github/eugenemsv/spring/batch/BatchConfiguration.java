@@ -6,9 +6,10 @@ import org.springframework.batch.core.configuration.annotation.EnableBatchProces
 import org.springframework.batch.core.configuration.annotation.JobBuilderFactory;
 import org.springframework.batch.core.configuration.annotation.StepBuilderFactory;
 import org.springframework.batch.core.launch.support.RunIdIncrementer;
-import org.springframework.batch.core.listener.JobExecutionListenerSupport;
-import org.springframework.batch.item.ItemProcessor;
+import org.springframework.batch.integration.async.AsyncItemProcessor;
+import org.springframework.batch.integration.async.AsyncItemWriter;
 import org.springframework.batch.item.ItemReader;
+import org.springframework.batch.item.ItemWriter;
 import org.springframework.batch.item.database.BeanPropertyItemSqlParameterSourceProvider;
 import org.springframework.batch.item.database.JdbcBatchItemWriter;
 import org.springframework.batch.item.database.builder.JdbcBatchItemWriterBuilder;
@@ -16,14 +17,17 @@ import org.springframework.batch.item.file.FlatFileItemReader;
 import org.springframework.batch.item.file.builder.FlatFileItemReaderBuilder;
 import org.springframework.batch.item.file.mapping.BeanWrapperFieldSetMapper;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.io.ClassPathResource;
+import org.springframework.core.task.SimpleAsyncTaskExecutor;
 import org.springframework.core.task.TaskExecutor;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
 import javax.sql.DataSource;
+import java.util.concurrent.Future;
 
 @Configuration
 @EnableBatchProcessing
@@ -48,9 +52,14 @@ public class BatchConfiguration {
                 .build();
     }
 
+    // Instead of using PersonItemProcessor directly we are using AsyncItemProcessor
+    // It allows to process items in parallel
     @Bean
-    public PersonItemProcessor processor() {
-        return new PersonItemProcessor();
+    public AsyncItemProcessor<Person, Person> asyncProcessor() {
+        AsyncItemProcessor<Person, Person> asyncItemProcessor = new AsyncItemProcessor<>();
+        asyncItemProcessor.setTaskExecutor(new SimpleAsyncTaskExecutor());
+        asyncItemProcessor.setDelegate(new PersonItemProcessor());
+        return asyncItemProcessor;
     }
 
     @Bean
@@ -61,6 +70,14 @@ public class BatchConfiguration {
                 .dataSource(dataSource)
                 .build();
     }
+
+    @Bean
+    public AsyncItemWriter<Person> asyncWriter(@Qualifier("writer") ItemWriter<Person> writer) {
+        AsyncItemWriter<Person> asyncItemWriter = new AsyncItemWriter<>();
+        asyncItemWriter.setDelegate(writer);
+        return asyncItemWriter;
+    }
+
     @Bean
     public Job importUserJob(JobCompletionNotificationListener listener, Step step) {
         return jobBuilderFactory.get("importPersonJob")
@@ -77,7 +94,7 @@ public class BatchConfiguration {
     }
 
     @Bean
-    public TaskExecutor stepTaskExecutor(){
+    public TaskExecutor stepTaskExecutor() {
         ThreadPoolTaskExecutor threadPoolTaskExecutor = new ThreadPoolTaskExecutor();
         threadPoolTaskExecutor.setCorePoolSize(4);
         threadPoolTaskExecutor.setMaxPoolSize(8);
@@ -85,12 +102,12 @@ public class BatchConfiguration {
     }
 
     @Bean
-    public Step step(JdbcBatchItemWriter<Person> writer,
+    public Step step(AsyncItemWriter<Person> writer,
                      ItemReader<Person> reader,
-                     ItemProcessor<Person, Person> itemProcessor,
-                     TaskExecutor taskExecutor) {
+                     AsyncItemProcessor<Person, Person> itemProcessor,
+                     @Qualifier("stepTaskExecutor") TaskExecutor taskExecutor) {
         return stepBuilderFactory.get("personStep")
-                .<Person, Person>chunk(2)
+                .<Person, Future<Person>>chunk(2)
                 .reader(reader)
                 .processor(itemProcessor)
                 .writer(writer)
