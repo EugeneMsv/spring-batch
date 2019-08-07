@@ -19,7 +19,9 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.io.ClassPathResource;
+import org.springframework.core.task.TaskExecutor;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
 import javax.sql.DataSource;
 
@@ -75,14 +77,24 @@ public class BatchConfiguration {
     }
 
     @Bean
+    public TaskExecutor stepTaskExecutor(){
+        ThreadPoolTaskExecutor threadPoolTaskExecutor = new ThreadPoolTaskExecutor();
+        threadPoolTaskExecutor.setCorePoolSize(4);
+        threadPoolTaskExecutor.setMaxPoolSize(8);
+        return threadPoolTaskExecutor;
+    }
+
+    @Bean
     public Step step(JdbcBatchItemWriter<Person> writer,
-                      ItemReader<Person> reader,
-                      ItemProcessor<Person, Person> itemProcessor) {
+                     ItemReader<Person> reader,
+                     ItemProcessor<Person, Person> itemProcessor,
+                     TaskExecutor taskExecutor) {
         return stepBuilderFactory.get("personStep")
-                .<Person, Person>chunk(10)
+                .<Person, Person>chunk(2)
                 .reader(reader)
                 .processor(itemProcessor)
                 .writer(writer)
+                .taskExecutor(taskExecutor)
                 .build();
     }
 }
